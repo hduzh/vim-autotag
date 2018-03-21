@@ -261,13 +261,45 @@ class AutoTag(object):  # pylint: disable=too-many-instance-attributes
         for ((tags_dir, tags_file), sources) in self.tags.items():
             self.update_tags_file(tags_dir, tags_file, sources)
 
+g_thread = None
+g_lock = None
+g_files = set()
+
+def autotag_impl():
+    import time
+    while True:
+        begin = time.time()
+        g_lock.acquire()
+        files = list(g_files)
+        g_files.clear()
+        g_lock.release()
+        try:
+            runner = AutoTag()
+            for f in files:
+                runner.add_source(f)
+            runner.rebuild_tag_files()
+        except Exception:  # pylint: disable=W0703
+            logging.warning(format_exc())
+        end = time.time()
+        use_time = end - begin
+        sleep_time = 10 - use_time
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+def start_thread():
+    import threading
+    global g_thread
+    global g_lock
+    g_lock = threading.Lock()
+    g_thread = threading.Thread(target=autotag_impl)
+    g_thread.daemon = True
+    g_thread.start()
 
 def autotag():
-    """ Do the work """
-    try:
-        if not vim_global("Disabled", bool):
-            runner = AutoTag()
-            runner.add_source(vim.eval("expand(\"%:p\")"))
-            runner.rebuild_tag_files()
-    except Exception:  # pylint: disable=W0703
-        logging.warning(format_exc())
+    if vim_global("Disabled", bool):
+        return
+    if g_thread is None:
+        start_thread()
+    g_lock.acquire()
+    g_files.add(vim.eval("expand(\"%:p\")"))
+    g_lock.release()
